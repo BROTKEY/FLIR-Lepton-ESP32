@@ -136,6 +136,10 @@ void setup(){
   Serial.println("\r\nSetup has been finished.");
 }
 
+float bytesToTemp(byte byte1, byte byte2) {
+  return ((((uint16_t)byte1 << 8) | byte2)/ 100) - 273.15;
+}
+
 void loop(){
   p = frame_buffer;
 
@@ -156,6 +160,18 @@ void loop(){
   float center = 0;
 
   for(int row=0; row<PACKETS_PER_FRAME; row++) {
+    for(int col=4; col<(PACKET_SIZE); col+=2) {
+      uint8_t byte1 = *(p+row*PACKET_SIZE+(col));
+      uint8_t byte2 = *(p+row*PACKET_SIZE+(col+1));
+      float temp = bytesToTemp(byte1, byte2);
+
+      if (temp > hotspot) {
+        hotspot = temp;
+      }
+    }
+  }
+
+  for(int row=0; row<PACKETS_PER_FRAME; row++) {
     uint8_t stat1 = *(p+row*PACKET_SIZE+(2));
     uint8_t stat2 = *(p+row*PACKET_SIZE+(3));
 
@@ -166,28 +182,21 @@ void loop(){
     for(int col=4; col<(PACKET_SIZE); col+=2) {
       uint8_t byte1 = *(p+row*PACKET_SIZE+(col));
       uint8_t byte2 = *(p+row*PACKET_SIZE+(col+1));
-      float temp = ((((uint16_t)byte1 << 8) | byte2)/ 100) - 273.15;
+      float temp = bytesToTemp(byte1, byte2);
       bool centerBool = false;
-      //Serial.print(temp); Serial.print(" ");
-
-      if (temp > hotspot) {
-        hotspot = temp;
-      }
-
+      
       if (row == 29 && col == 80) {
         center = temp;
         centerBool = true;
       }
       
-      if ((temp > 27 && !centerBool) || (centerBool && temp < 27)) {
+      if ((temp > (hotspot*0.9) && !centerBool) || (centerBool && (hotspot*0.9) < 27)) {
         display.drawPixel((col-3)/2, row, SH110X_WHITE);
       } else {
         display.drawPixel((col-3)/2, row, SH110X_BLACK);
       }
     }
-    //Serial.println(" ");
   }
-  //Serial.println(" ");
   
   display.drawLine(80, 0, 80, 64, SH110X_WHITE);
   display.fillRect(0, 60, 124, 4, SH110X_WHITE);

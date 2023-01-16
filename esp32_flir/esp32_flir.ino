@@ -13,13 +13,18 @@
 #define DATA0REG 0x0008
 #define DATA1REG 0x000A
 
-SPISettings settings(20000000, MSBFIRST, SPI_MODE3);
-Adafruit_SH1106G display = Adafruit_SH1106G(128, 64, &Wire, -1);
-byte frame_buffer[164 * 60] = {0};
-byte *p;
-
-short wireWrite16(short data) {
-  return Wire.write(highByte(data)) + Wire.write(lowByte(data));
+short wireWrite16(short target, short data, bool end = true, bool begin = true) {
+  if (begin) {
+    Wire.beginTransmission(LEPTON);
+  }
+  Wire.write(highByte(target));
+  Wire.write(lowByte(target));
+  Wire.write(highByte(data));
+  Wire.write(lowByte(data));
+  if (end) {
+    Wire.endTransmission();
+  }
+  return 0;
 }
 
 short getState() {
@@ -55,6 +60,11 @@ short getAGCState() {
   return state;
 }
 
+SPISettings settings(20000000, MSBFIRST, SPI_MODE3);
+Adafruit_SH1106G display = Adafruit_SH1106G(128, 64, &Wire, -1);
+byte frame_buffer[164 * 60] = {0};
+byte *p;
+
 void setup(){
   display.begin();
   display.clearDisplay();
@@ -66,52 +76,35 @@ void setup(){
   ledcAttachPin(13, 1);
   ledcSetup(1, 25000000, 1);
   ledcWrite(1, 1);
-  delay(5000);  
+  delay(5000);
   Serial.begin(115200);
 
   Wire.begin();
 
-  uint16_t state = 0;
-  
+  wireWrite16(LENGREG, 0x2);
+  wireWrite16(DATA0REG, 0x0, false, true);
+  wireWrite16(DATA1REG, 0x0, true, false);
+  wireWrite16(CMDREG, 0x101);
+  delay(100); 
+
+  short state = 0;
+
   do {
     state = getState();
     Serial.print(" state: ");
-    Serial.print(state);
+    Serial.print(state,HEX);  
     delay(250);
   } while (state != 6);
 
-  // Serial.println("\r\nLepton Ready");
-  // Serial.println("");
+  state = getAGCState();
+  Serial.print(" AGC state: ");
+  Serial.print(state,HEX);  
+  delay(250);
 
-  // Wire.beginTransmission(LEPTON);
-  // wireWrite16(DATA0REG);
-  // wireWrite16(0x0001);
-  // Wire.endTransmission();
+  Serial.println("");
+  Serial.println("\r\nLepton Ready");
 
-  // Wire.beginTransmission(LEPTON);
-  // wireWrite16(DATA1REG);
-  // wireWrite16(0x0000);
-  // Wire.endTransmission();
-
-  // Wire.beginTransmission(LEPTON);
-  // wireWrite16(LENGREG);
-  // wireWrite16(0x0002);
-  // Wire.endTransmission();
-
-  // Wire.beginTransmission(LEPTON);
-  // wireWrite16(CMDREG);
-  // wireWrite16(0x0101);
-  // Wire.endTransmission();
-  
-  // do {
-  //   state = getState();
-  //   Serial.print(" state: ");
-  //   Serial.print(state);  
-  //   delay(250);
-  // } while (state != 6);
-
-  // Serial.print("\r\nAGCState: ");
-  // Serial.print(getAGCState());
+  Serial.println("\r\nsync...");
 
   pinMode(5, OUTPUT);
   pinMode(27, INPUT);
@@ -157,7 +150,9 @@ void loop(){
 
   bool dead = false;
   float hotspot = 0;
+  float coldspot = 10000;
   float center = 0;
+  float threshold = 0;
 
   for(int row=0; row<PACKETS_PER_FRAME; row++) {
     for(int col=4; col<(PACKET_SIZE); col+=2) {
@@ -168,8 +163,14 @@ void loop(){
       if (temp > hotspot) {
         hotspot = temp;
       }
+
+      if (temp < coldspot) {
+        coldspot = temp;
+      }
     }
   }
+
+  threshold = (hotspot + coldspot)/2;
 
   for(int row=0; row<PACKETS_PER_FRAME; row++) {
     uint8_t stat1 = *(p+row*PACKET_SIZE+(2));
@@ -190,7 +191,7 @@ void loop(){
         centerBool = true;
       }
       
-      if ((temp > (hotspot*0.9) && !centerBool) || (centerBool && (hotspot*0.9) < 27)) {
+      if ((temp > threshold && !centerBool) || (centerBool && threshold > temp)) {
         display.drawPixel((col-3)/2, row, SH110X_WHITE);
       } else {
         display.drawPixel((col-3)/2, row, SH110X_BLACK);
@@ -199,15 +200,23 @@ void loop(){
   }
   
   display.drawLine(80, 0, 80, 64, SH110X_WHITE);
-  display.fillRect(0, 60, 124, 4, SH110X_WHITE);
+  display.fillRect(0, 60, 80, 4, SH110X_WHITE);
   display.setCursor(83, 0);
   display.println("HOT:");
   display.setCursor(83, 8);
   display.print(hotspot);
+  display.setCursor(83, 16);
+  display.println("COLD:");
   display.setCursor(83, 24);
-  display.println("CENT:");
+  display.print(coldspot);
   display.setCursor(83, 32);
+  display.println("CENT:");
+  display.setCursor(83, 40);
   display.print(center);
+  display.setCursor(83, 48);
+  display.println("THS:");
+  display.setCursor(83, 56);
+  display.print(threshold);
 
   if (!dead) {
     display.display();

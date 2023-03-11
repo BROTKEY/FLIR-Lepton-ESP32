@@ -1,10 +1,10 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SH110X.h>
+#include <Adafruit_ST7789.h>
 #include <math.h>
 
-#define PACKET_SIZE (164)
+#define PACKET_SIZE 80
 #define PACKETS_PER_FRAME 60
 #define LEPTON 0x2A
 
@@ -61,19 +61,22 @@ short getAGCState() {
 }
 
 SPISettings settings(20000000, MSBFIRST, SPI_MODE3);
-Adafruit_SH1106G display = Adafruit_SH1106G(128, 64, &Wire, -1);
-byte frame_buffer[164 * 60] = {0};
-byte *p;
+SPIClass test = SPIClass(HSPI);
+Adafruit_ST7789 tft = Adafruit_ST7789(&test, 4, 2, 15);
+uint16_t frame_buffer[PACKETS_PER_FRAME * PACKET_SIZE] = {0};
+uint16_t *p;
 
 void setup(){
-  display.begin();
-  display.clearDisplay();
-  display.setTextColor(SH110X_WHITE);
-  display.setTextSize(1);
-  display.print("BOOTING...");
-  display.display();
+  tft.setSPISpeed(20000000);
+  delay(250);
+  tft.init(240,320);
+  tft.setRotation(1);
+  tft.fillScreen(0x0000);
+  tft.setTextColor(0xFFFF);
+  tft.setTextSize(1);
+  tft.print("BOOTING...");
 
-  ledcAttachPin(13, 1);
+  ledcAttachPin(25, 1);
   ledcSetup(1, 25000000, 1);
   ledcWrite(1, 1);
   delay(5000);
@@ -127,38 +130,59 @@ void setup(){
   SPI.endTransaction();
 
   Serial.println("\r\nSetup has been finished.");
+  tft.fillScreen(0x0000);
+  // tft.setCursor(83, 0);
+  // tft.println("HOT:");
+  // tft.setCursor(83, 16);
+  // tft.println("COLD:");
 }
 
-float bytesToTemp(byte byte1, byte byte2) {
-  return ((((uint16_t)byte1 << 8) | byte2)/ 100) - 273.15;
+float pixelToTemp(uint16_t pixel) {
+  return (pixel/ 100) - 273.15;
 }
+
+uint16_t tempToColor(float temp, float hotspot, float coldspot) {
+  uint16_t norm = ((temp - coldspot) / (hotspot - coldspot)) * 255;
+
+  uint16_t b = (norm >> 3) & 0x1f;
+  uint16_t g = ((norm >> 2) & 0x3f) << 5;
+  uint16_t r = ((norm >> 3) & 0x1f) << 11;
+
+  return (uint16_t) (r | g | b);
+}
+
 
 void loop(){
   p = frame_buffer;
-
-  display.clearDisplay();
+  bool dead = false;
+  float hotspot = -690;
+  float coldspot = 690;
+  long start = millis();
 
   SPI.beginTransaction(settings);
-  for(int j = 0; j < 60; j++) {
+  for(int row = 0; row < PACKETS_PER_FRAME; row++) {
     digitalWrite(5, LOW);
-    for(int k = 0; k < 164; k++) {
-      *(p+j*PACKET_SIZE+k) = SPI.transfer(0x00);
+    SPI.transfer(0x00);
+    SPI.transfer(0x00);
+    uint8_t byte1 = SPI.transfer(0x00);
+    uint8_t byte2 = SPI.transfer(0x00);
+    uint16_t pixel = ((uint16_t)byte1 << 8) | byte2;
+    if(pixel == 0xFFFF) {
+      dead = true;
+    };
+    for(int col = 0; col < PACKET_SIZE; col++) {
+      byte1 = SPI.transfer(0x00);
+      byte2 = SPI.transfer(0x00);
+      pixel = ((uint16_t)byte1 << 8) | byte2;
+      *(p+row*PACKET_SIZE+col) = pixel;
     };
     digitalWrite(5, HIGH);
-  }
+  };
   SPI.endTransaction();
 
-  bool dead = false;
-  float hotspot = 0;
-  float coldspot = 10000;
-  float center = 0;
-  float threshold = 0;
-
-  for(int row=0; row<PACKETS_PER_FRAME; row++) {
-    for(int col=4; col<(PACKET_SIZE); col+=2) {
-      uint8_t byte1 = *(p+row*PACKET_SIZE+(col));
-      uint8_t byte2 = *(p+row*PACKET_SIZE+(col+1));
-      float temp = bytesToTemp(byte1, byte2);
+  for(int row = 0; row < PACKETS_PER_FRAME; row++) {
+    for(int col = 0; col < PACKET_SIZE; col++) {
+      float temp = pixelToTemp(*(p+row*PACKET_SIZE+col));
 
       if (temp > hotspot) {
         hotspot = temp;
@@ -167,58 +191,27 @@ void loop(){
       if (temp < coldspot) {
         coldspot = temp;
       }
-    }
-  }
+    };
+  };
 
-  threshold = (hotspot + coldspot)/2;
-
-  for(int row=0; row<PACKETS_PER_FRAME; row++) {
-    uint8_t stat1 = *(p+row*PACKET_SIZE+(2));
-    uint8_t stat2 = *(p+row*PACKET_SIZE+(3));
-
-    if((((uint16_t)stat2 << 8) | stat1) == 0xFFFF) {
-      dead = true;
-    }
-
-    for(int col=4; col<(PACKET_SIZE); col+=2) {
-      uint8_t byte1 = *(p+row*PACKET_SIZE+(col));
-      uint8_t byte2 = *(p+row*PACKET_SIZE+(col+1));
-      float temp = bytesToTemp(byte1, byte2);
-      bool centerBool = false;
-      
-      if (row == 29 && col == 80) {
-        center = temp;
-        centerBool = true;
-      }
-      
-      if ((temp > threshold && !centerBool) || (centerBool && threshold > temp)) {
-        display.drawPixel((col-3)/2, row, SH110X_WHITE);
-      } else {
-        display.drawPixel((col-3)/2, row, SH110X_BLACK);
-      }
-    }
-  }
-  
-  display.drawLine(80, 0, 80, 64, SH110X_WHITE);
-  display.fillRect(0, 60, 80, 4, SH110X_WHITE);
-  display.setCursor(83, 0);
-  display.println("HOT:");
-  display.setCursor(83, 8);
-  display.print(hotspot);
-  display.setCursor(83, 16);
-  display.println("COLD:");
-  display.setCursor(83, 24);
-  display.print(coldspot);
-  display.setCursor(83, 32);
-  display.println("CENT:");
-  display.setCursor(83, 40);
-  display.print(center);
-  display.setCursor(83, 48);
-  display.println("THS:");
-  display.setCursor(83, 56);
-  display.print(threshold);
+  std::for_each(IIter, IIter, Funct)
+ 
+  for(int row = 0; row < PACKETS_PER_FRAME; row++) {
+    for(int col = 0; col < PACKET_SIZE; col++) {
+      *(p+row*PACKET_SIZE+col) = tempToColor(pixelToTemp(*(p+row*PACKET_SIZE+col)), hotspot, coldspot);
+    };
+  };
 
   if (!dead) {
-    display.display();
+    tft.startWrite();
+    tft.setAddrWindow(0, 0, 80, 60);
+    tft.writePixels(frame_buffer, PACKETS_PER_FRAME * PACKET_SIZE);
+    tft.endWrite();
+    // tft.setCursor(83, 8);
+    // tft.print(hotspot);
+    // tft.setCursor(83, 24);
+    // tft.print(coldspot);
+    Serial.print(millis() - start);
+    Serial.println(" : screen end");
   }
 }

@@ -1,7 +1,6 @@
 #include <Wire.h>
 #include <SPI.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7789.h>
+#include <Arduino_GFX_Library.h>
 #include <math.h>
 
 #define PACKET_SIZE 80
@@ -60,25 +59,23 @@ short getAGCState() {
   return state;
 }
 
-SPISettings settings(20000000, MSBFIRST, SPI_MODE3);
-SPIClass test = SPIClass(HSPI);
-Adafruit_ST7789 tft = Adafruit_ST7789(&test, 4, 2, 15);
+SPISettings settings(20000000, MSBFIRST, SPI_MODE3); 
+Arduino_ESP32SPI *bus = new Arduino_ESP32SPI(2 /* DC */, 15 /* CS */, 14 /* SCK */, 13 /* MOSI */, GFX_NOT_DEFINED /* MISO */, HSPI /* spi_num */);
+Arduino_TFT *tft = new Arduino_SSD1331(bus, 4, 0);
 uint16_t frame_buffer[PACKETS_PER_FRAME * PACKET_SIZE] = {0};
 uint16_t *p;
 
 void setup(){
-  tft.setSPISpeed(20000000);
-  delay(250);
-  tft.init(240,320);
-  tft.setRotation(1);
-  tft.fillScreen(0x0000);
-  tft.setTextColor(0xFFFF);
-  tft.setTextSize(1);
-  tft.print("BOOTING...");
-
-  ledcAttachPin(25, 1);
   ledcSetup(1, 25000000, 1);
+  ledcAttachPin(25, 1);
   ledcWrite(1, 1);
+
+  delay(250);
+  tft->begin();
+  tft->fillScreen(0x0000);
+  tft->setTextColor(0xFFFF);
+  tft->setTextSize(1);
+  tft->print("BOOTING....");
   delay(5000);
   Serial.begin(115200);
 
@@ -129,12 +126,8 @@ void setup(){
   digitalWrite(5, HIGH);
   SPI.endTransaction();
 
+  tft->fillScreen(0x0000);
   Serial.println("\r\nSetup has been finished.");
-  tft.fillScreen(0x0000);
-  // tft.setCursor(83, 0);
-  // tft.println("HOT:");
-  // tft.setCursor(83, 16);
-  // tft.println("COLD:");
 }
 
 float pixelToTemp(uint16_t pixel) {
@@ -157,7 +150,6 @@ void loop(){
   bool dead = false;
   float hotspot = -690;
   float coldspot = 690;
-  long start = millis();
 
   SPI.beginTransaction(settings);
   for(int row = 0; row < PACKETS_PER_FRAME; row++) {
@@ -193,8 +185,6 @@ void loop(){
       }
     };
   };
-
-  std::for_each(IIter, IIter, Funct)
  
   for(int row = 0; row < PACKETS_PER_FRAME; row++) {
     for(int col = 0; col < PACKET_SIZE; col++) {
@@ -203,15 +193,12 @@ void loop(){
   };
 
   if (!dead) {
-    tft.startWrite();
-    tft.setAddrWindow(0, 0, 80, 60);
-    tft.writePixels(frame_buffer, PACKETS_PER_FRAME * PACKET_SIZE);
-    tft.endWrite();
-    // tft.setCursor(83, 8);
-    // tft.print(hotspot);
-    // tft.setCursor(83, 24);
-    // tft.print(coldspot);
-    Serial.print(millis() - start);
-    Serial.println(" : screen end");
+    tft->startWrite();
+    tft->writeAddrWindow(1,1,80,60);
+    tft->writePixels(p, PACKET_SIZE * PACKETS_PER_FRAME);
+    tft->endWrite();
+    delay(10);
+  } else {
+    delay(15);
   }
 }
